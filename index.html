@@ -26,6 +26,8 @@
 .cache-choice{display:flex;flex-direction:row;align-items:center;gap:12px;margin-bottom:14px}.cache-choice input{width:16px;height:16px;min-height:16px}
 
 .manual-panel{padding:20px 24px;margin-bottom:24px}.manual-panel>summary{cursor:pointer;color:var(--accent);font-size:14px}.manual-panel summary span{font-size:11px;color:var(--muted);margin-left:14px}.manual-panel>p{font-size:12px;margin-top:16px}.manual-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.manual-grid article{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:15px;border:1px solid var(--border);border-radius:5px}.manual-grid article>div{flex:1;min-width:120px}.manual-grid strong,.manual-grid small{display:block}.manual-grid strong{font-size:12px}.manual-grid a{font-size:11px}@media(max-width:650px){.manual-grid{grid-template-columns:1fr}.manual-panel summary span{display:block;margin-left:0}}
+
+.relevance-bar{display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin:0 0 24px}.relevance-bar label{flex-direction:row;align-items:center;gap:10px}.relevance-bar input{width:16px;height:16px}.result-group{margin-bottom:35px}.result-group>h2{color:var(--accent2);font-size:18px}.rank-reasons{font-size:11px;color:var(--muted);margin:18px 0}.rank-reasons summary{cursor:pointer;color:var(--accent)}.rank-reasons ul{padding-left:20px}.rank-reasons li{margin:8px 0}
 </style>
 </head>
 <body><div id="app"><div class="boot">ATLAS <span>Opening your workspace…</span></div></div>
@@ -77,6 +79,42 @@ function parseImport(text) {
   return cases;
 }
 function serialize(cases) { return JSON.stringify({app:'ATLAS',version:VERSION,exportedAt:now(),cases},null,2); }
+
+// relevance
+const normalizeText=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim().replace(/\s+/g,' ');
+const containsPhrase=(text,phrase)=>!!phrase&&(' '+text+' ').includes(' '+phrase+' ');
+function assessRelevance(evidence,inputs={}){
+ const d=evidence.details||{},reasons=[];
+ if(evidence.method==='manual')return {group:'manual',score:70,label:'Manual observation',reasons:['Saved by you after manual review; not independently verified.']};
+ // Never score URLs, API queries, provenance or the supplied input itself as returned content.
+ const title=normalizeText(evidence.title),summary=normalizeText(evidence.summary),content=[title,summary,normalizeText(d.location),normalizeText(d.organization)].join(' ');
+ const name=normalizeText(inputs.name),nameMatched=containsPhrase(title,name)||containsPhrase(summary,name);
+ const locationParts=String(inputs.location||'').split(/[,;\n]/).map(normalizeText).filter(Boolean);
+ const organization=normalizeText(inputs.employer||inputs.organization);
+ const matchedLocation=locationParts.filter(term=>containsPhrase(content,term));
+ const orgMatched=containsPhrase(content,organization);
+ if(nameMatched)reasons.push('Supplied name appears in the returned title or summary.');
+ if(matchedLocation.length)reasons.push('Returned content mentions location text: '+matchedLocation.join(', ')+'.');
+ else if(locationParts.length)reasons.push('Supplied location was not found in the returned content; this is not a confirmed mismatch.');
+ if(orgMatched)reasons.push('Returned content mentions the supplied organization.');
+ else if(organization)reasons.push('Supplied organization was not found in the returned content.');
+ if(d.lookupMethod==='Exact username / direct profile')return {group:'profile',score:80+(nameMatched?5:0)+(matchedLocation.length?5:0)+(orgMatched?5:0),label:'Direct profile match',reasons:['Source returned a profile for the queried username. Identity remains unconfirmed.',...reasons]};
+ if(nameMatched&&(matchedLocation.length||orgMatched))return {group:'context',score:50+(matchedLocation.length?10:0)+(orgMatched?10:0),label:'Name + context reference',reasons:[...reasons,'Text overlap ranks this reference; it does not verify the same person.']};
+ if(!nameMatched&&name)reasons.unshift('The supplied name was not found as a complete phrase in the returned title or summary.');
+ if(!name)reasons.unshift('This is a broad reference or non-unique display-name candidate, not a direct username lookup.');
+ reasons.push('Kept under broad references so you can review it if useful.');
+ return {group:'broad',score:nameMatched?20:10,label:'Broad reference',reasons};
+}
+function rankedEvidence(search){
+ return search.evidence.map(e=>({e,rank:assessRelevance(e,search.inputs)})).sort((a,b)=>b.rank.score-a.rank.score);
+}
+function relevantGraph(search,includeBroad=false){
+ if(includeBroad)return search;
+ const ids=new Set(rankedEvidence(search).filter(r=>r.rank.group!=='broad').map(r=>r.e.id));
+ const entities=search.entities.filter(e=>e.id==='subject'||e.evidenceIds.some(id=>ids.has(id)));
+ const nodes=new Set(entities.map(e=>e.id));
+ return {...search,entities,links:search.links.filter(l=>nodes.has(l.source)&&nodes.has(l.target))};
+}
 
 // storage
 let db;
@@ -377,25 +415,37 @@ const glyphs={new:'M12 4v16M4 12h16',graph:'M5 5l14 14M5 19 19 5M5 5v14M19 5v14'
 const icon=name=>`<svg viewBox="0 0 24 24" class="icon" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="${glyphs[name]||glyphs.search}"/></svg>`;
 const NAV=[['new','New search'],['graph','Graph explorer'],['evidence','Evidence library'],['history','History'],['settings','Settings']];
 
+let includeBroad=false;
 let saved=[],current=null,view='new',graph=null,filter='all',query='',busy=null,saveError='';
 const app=document.querySelector('#app');
 function toast(text){const el=document.querySelector('#toast');el.textContent=text;el.className='show';clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.className='',7000);}
 const when=at=>new Date(at).toLocaleString();
 const sourceLink=(url,label='Original source')=>safeUrl(url)?`<a target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" href="${esc(safeUrl(url))}">${esc(label)} ↗</a>`:'';
-function go(next){if(busy)return;if(next==='new'){current=null;query='';filter='all';}view=next;render();}
+function go(next){if(busy)return;if(next==='new'){current=null;query='';filter='all';includeBroad=false;}view=next;render();}
 function render(){
  graph?.dispose();graph=null;
- app.innerHTML=`<header class="header"><button class="brand" data-nav="new" ${busy?'disabled':''}><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTYiIGZpbGw9IiMxNDI2MzgiLz48cGF0aCBkPSJNMTIgNDkgMzIgMTJsMjAgMzdINDBsLTgtMTYtOCAxNloiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzY1YzlmMiIgc3Ryb2tlLXdpZHRoPSI0Ii8+PHBhdGggZD0iTTIzIDQ0aDE4IiBzdHJva2U9IiM2NWM5ZjIiIHN0cm9rZS13aWR0aD0iNCIvPjwvc3ZnPgo=" alt="">ATLAS</button><nav aria-label="Main navigation">${NAV.map(([id,label])=>`<button data-nav="${id}" title="${label}" aria-label="${label}" ${view===id?'aria-current="page"':''} ${busy||(['graph','evidence'].includes(id)&&!current)?'disabled':''}>${icon(id)}<span>${label}</span></button>`).join('')}</nav></header><main>${saveError?`<div class="notice">${esc(saveError)}</div>`:''}${busy?loading():pages[view]()}</main><footer>Public profiles. Source-backed results.<span>ATLAS · v0.8.1 · Static</span></footer><dialog id="detail"></dialog><input type="file" id="import" accept=".json,application/json" hidden>`;
- if(view==='graph'&&current&&!busy)graph=mountGraph(document.querySelector('#graph'),current,{filter,onSelect:inspect});
+ app.innerHTML=`<header class="header"><button class="brand" data-nav="new" ${busy?'disabled':''}><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTYiIGZpbGw9IiMxNDI2MzgiLz48cGF0aCBkPSJNMTIgNDkgMzIgMTJsMjAgMzdINDBsLTgtMTYtOCAxNloiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzY1YzlmMiIgc3Ryb2tlLXdpZHRoPSI0Ii8+PHBhdGggZD0iTTIzIDQ0aDE4IiBzdHJva2U9IiM2NWM5ZjIiIHN0cm9rZS13aWR0aD0iNCIvPjwvc3ZnPgo=" alt="">ATLAS</button><nav aria-label="Main navigation">${NAV.map(([id,label])=>`<button data-nav="${id}" title="${label}" aria-label="${label}" ${view===id?'aria-current="page"':''} ${busy||(['graph','evidence'].includes(id)&&!current)?'disabled':''}>${icon(id)}<span>${label}</span></button>`).join('')}</nav></header><main>${saveError?`<div class="notice">${esc(saveError)}</div>`:''}${busy?loading():pages[view]()}</main><footer>Public profiles. Source-backed results.<span>ATLAS · v0.9.0 · Static</span></footer><dialog id="detail"></dialog><input type="file" id="import" accept=".json,application/json" hidden>`;
+ if(view==='graph'&&current&&!busy)graph=mountGraph(document.querySelector('#graph'),relevantGraph(current,includeBroad),{filter,onSelect:inspect});
 }
 const heading=(title,text,extra='')=>`<div class="heading"><div><h1>${title}</h1><p>${text}</p></div>${extra}</div>`;
 const empty=(text)=>`<div class="empty">${icon('search')}<p>${text}</p></div>`;
 function loading(){return `<section class="loading"><span class="spinner"></span><h1>Searching public sources…</h1><p>Checking browser-accessible sources and preparing links for manual review.</p><button class="secondary" data-action="cancel">Cancel search</button></section>`;}
-function resultSummary(){return `<div class="summary"><span>${current.evidence.filter(e=>e.method!=='manual').length} automatic result(s)</span><span>${current.evidence.length} reference${current.evidence.length===1?'':'s'}</span><span>${current.status==='partial'?'Some sources could not be searched':current.status==='cancelled'?'Search cancelled':'Search finished'}</span><button class="text-button" data-action="refresh">Refresh sources</button><details><summary>Source status</summary>${current.history.map(h=>`<div class="source-status"><strong>${esc(h.connector)}</strong><span>${esc(h.status)}</span><p>${esc(h.message)}</p></div>`).join('')}</details></div>`;}
+function resultSummary(){
+ const ranked=rankedEvidence(current),primary=ranked.filter(r=>r.rank.group!=='broad').length,broad=ranked.length-primary;
+ return `<div class="summary"><span>${primary} focused result(s)</span><span>${broad} broad reference(s)</span><span>${current.status==='partial'?'Some sources could not be searched':current.status==='cancelled'?'Search cancelled':'Search finished'}</span><button class="text-button" data-action="refresh">Refresh sources</button><details><summary>Source status</summary>${current.history.map(h=>`<div class="source-status"><strong>${esc(h.connector)}</strong><span>${esc(h.status)}</span><p>${esc(h.message)}</p></div>`).join('')}</details></div><div class="relevance-bar"><label><input id="show-broad" type="checkbox" ${includeBroad?'checked':''}>Include broad references (${broad})</label><small>Ranked by returned text and lookup method. Relevance does not confirm identity.</small></div>${!primary&&broad?'<div class="notice">No focused matches in the returned content. Broad references are available above; none have been deleted.</div>':''}`;
+}
+
 const pages={
  new(){return `<section class="search-home"><div class="eyebrow">PUBLIC PROFILE SEARCH</div><h1>Start with what you know.</h1><p>A username, a name, or a little more context.</p><form id="search-form"><div class="main-inputs"><label>Username<input name="username" placeholder="Enter username" maxlength="100" autocomplete="off"></label><span class="or">or</span><label>Name<input name="name" placeholder="Enter name" maxlength="160" autocomplete="off"></label></div><details class="more"><summary>More information <span>Optional</span></summary><div class="input-grid"><label>City or country<input name="location" maxlength="160" placeholder="Context for comparing results"></label><label>Organization<input name="organization" maxlength="160" placeholder="Employer or organization"></label><label>Public professional email (context only)<input name="email" type="email" maxlength="200"></label><label>Public profile links<textarea name="profiles" rows="2" placeholder="One https:// URL per line"></textarea></label></div><label>Notes<textarea name="notes" rows="2" maxlength="1000" placeholder="Context you want to keep with the results"></textarea></label></details><div id="form-error" role="alert"></div><button class="primary search-submit">${icon('search')}Search</button><small class="coverage-note">Username: 8 automatic profile sources · Name: Wikipedia, Wikidata &amp; Stack Overflow</small><small class="search-note">Public references are possible matches. A shared name does not confirm an identity.</small></form></section>`;},
  graph(){if(!current)return empty('Start a new search.');return heading(esc(current.title),'Explore the public references found by your search.')+resultSummary()+manualPanel()+`<div class="graph-layout"><section class="panel"><div class="graph-toolbar"><label>Show <select id="graph-filter"><option value="all">All references</option><option value="profile" ${filter==='profile'?'selected':''}>Profiles</option><option value="document" ${filter==='document'?'selected':''}>Public references</option><option value="person" ${filter==='person'?'selected':''}>Search subject</option></select></label><div><button data-action="out" aria-label="Zoom out">−</button><button data-action="fit">Fit</button><button data-action="in" aria-label="Zoom in">+</button></div></div><div id="graph" class="graph-canvas"></div><div class="graph-hint">Drag to move · Scroll to zoom · Select a reference for its source</div></section><aside class="panel" id="inspector"><div class="empty"><p>Select a reference to inspect its source and details.</p></div></aside></div>`;},
- evidence(){if(!current)return empty('Start a new search.');const rows=current.evidence.filter(e=>(e.title+' '+e.source+' '+e.summary).toLowerCase().includes(query.toLowerCase()));return heading('Evidence library',esc(current.title))+manualPanel()+`<form id="filter-evidence" class="filter"><input name="query" aria-label="Filter evidence" placeholder="Find a reference…" value="${esc(query)}"><button class="secondary">Filter</button></form><div class="evidence-grid">${rows.length?rows.map(e=>`<article class="panel evidence"><div class="source-label">${esc(e.source)}<span>${e.method==='manual'?'Manual observation':'Possible match'}</span></div><h2>${esc(e.title)}</h2><p>${esc(e.summary)}</p>${e.details.comparison?`<p class="comparison">${esc(e.details.comparison)}</p>`:''}<small>${esc(e.details.provenance||'Source record')}<br>${when(e.retrievedAt)}</small><div class="evidence-actions">${sourceLink(e.details.url||e.url)}<button class="text-button" data-evidence="${esc(e.id)}">Details</button></div></article>`).join(''):empty('No references match this view.')}</div>`;},
+ evidence(){
+  if(!current)return empty('Start a new search.');
+  const rows=rankedEvidence(current).filter(({e})=>(e.title+' '+e.source+' '+e.summary).toLowerCase().includes(query.toLowerCase()));
+  const groups=[['profile','Direct profile matches'],['context','Name + context references'],['manual','Manual observations'],['broad','Broad references']];
+  const sections=groups.filter(([id])=>includeBroad||id!=='broad').map(([id,title])=>{const items=rows.filter(r=>r.rank.group===id);return items.length?`<section class="result-group"><h2>${title} <small>${items.length}</small></h2><div class="evidence-grid">${items.map(evidenceCard).join('')}</div></section>`:'';}).join('');
+  return heading('Evidence library',esc(current.title))+resultSummary()+`<form id="filter-evidence" class="filter"><input name="query" aria-label="Filter evidence" placeholder="Find a reference." value="${esc(query)}"><button class="secondary">Filter</button></form>`+(sections||empty('No focused references match this view. You can include broad references above.'))+manualPanel();
+ },
+
  history(){return heading('History','Your previous searches, saved in this browser.')+`<div class="panel history-list">${saved.length?saved.map(s=>`<button class="history-row" data-open="${esc(s.id)}"><span class="history-symbol">${icon('history')}</span><span><strong>${esc(s.title)}</strong><small>${when(s.createdAt)}</small></span><span class="history-count">${s.evidence.length} saved references →</span></button>`).join(''):empty('Your searches will appear here automatically.')}</div>`;},
  settings(){const theme=document.documentElement.dataset.theme;return heading('Settings','Appearance and search availability.')+`<section class="panel settings"><h2>Appearance</h2><div class="themes">${[['arctic','Arctic Steel'],['midnight','Midnight Intelligence'],['gold','Obsidian Gold']].map(([id,name])=>`<button class="theme ${theme===id?'chosen':''}" data-theme-choice="${id}" aria-pressed="${theme===id}"><div class="theme-preview" data-preview="${id}"><i></i><span><b></b><em></em><em></em></span></div><strong>${name}</strong>${id==='arctic'?'<small>Default</small>':''}</button>`).join('')}</div></section><section class="panel settings"><h2>Search coverage</h2><p>Username checks: GitHub, Bluesky, Mastodon.social, Hacker News, Lichess, Chess.com, DEV.to and GitLab. Stack Overflow adds display-name candidates for usernames and names. Name references also come from Wikidata and Wikipedia EN/FR. All automatic requests run directly from your browser. Other profile sites and Google/Bing searches are provided as links for manual review. ATLAS is not affiliated with Chess.com.</p><p>These sources do not cover the whole web. City and organization refine reference queries and search links. Professional email and notes are context only. A blocked source is shown as unavailable. Manual profile URL templates adapted from WhatsMyName (Micah Hoffman and contributors), CC BY-SA 4.0; attribution and revision are in README.md.</p></section><section class="panel settings"><h2>History data</h2><p>Search results and evidence are saved on this browser and can be reopened from History. Export a backup to move them between devices or website addresses.</p><div class="settings-actions"><button class="secondary" data-action="export">Export history</button><button class="secondary" data-action="import">Import history</button></div></section>`;}
 };
@@ -410,9 +460,9 @@ document.addEventListener('click',async event=>{
  const b=event.target.closest('button');if(!b)return;
  try{
   if(b.dataset.nav)go(b.dataset.nav);
-  if(b.dataset.open){current=saved.find(s=>s.id===b.dataset.open);view='graph';query='';filter='all';render();}
+  if(b.dataset.open){current=saved.find(s=>s.id===b.dataset.open);view='graph';query='';filter='all';includeBroad=false;render();}
   if(b.dataset.themeChoice){document.documentElement.dataset.theme=b.dataset.themeChoice;try{localStorage.setItem('atlas-theme',b.dataset.themeChoice);}catch{toast('Theme applied for this session.');}render();}
-  if(b.dataset.evidence){const e=current.evidence.find(e=>e.id===b.dataset.evidence),d=document.querySelector('#detail');d.innerHTML=`<div class="dialog-head"><h2>${esc(e.title)}</h2><button data-action="close" aria-label="Close details">×</button></div><div class="inspect"><p>${esc(e.summary)}</p><dl>${Object.entries(e.details).filter(([k,v])=>v).map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>${sourceLink(e.url)}<small>${when(e.retrievedAt)}</small></div>`;d.showModal();}
+  if(b.dataset.evidence){const e=current.evidence.find(e=>e.id===b.dataset.evidence),d=document.querySelector('#detail');d.innerHTML=`<div class="dialog-head"><h2>${esc(e.title)}</h2><button data-action="close" aria-label="Close details">×</button></div><div class="inspect"><p>${esc(e.summary)}</p><h3>Why this result?</h3><p>${esc(assessRelevance(e,current.inputs).reasons.join(' '))}</p><dl>${Object.entries(e.details).filter(([k,v])=>v).map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>${sourceLink(e.url)}<small>${when(e.retrievedAt)}</small></div>`;d.showModal();}
   if(b.dataset.review){
    const link=manualLinks(current).find(l=>l.url===b.dataset.review);if(!link)return;
    const d=document.querySelector('#detail');
@@ -432,7 +482,7 @@ async function executeSearch(values,force=false){
  const controller=new AbortController();busy=controller;render();
  try{applyResults(search,await automaticSearch(values,controller.signal));}
  catch(error){search.status=controller.signal.aborted?'cancelled':'partial';search.history.push({id:uid(),at:new Date().toISOString(),connector:'Search service',target:search.title,status:'unavailable',message:controller.signal.aborted?'Search cancelled.':error.message});}
- finally{busy=null;current=search;view='graph';try{await save(search);}catch(error){saveError='History could not be saved: '+error.message;}render();}
+ finally{busy=null;current=search;includeBroad=false;view='graph';try{await save(search);}catch(error){saveError='History could not be saved: '+error.message;}render();}
 }
 document.addEventListener('submit',async event=>{
  event.preventDefault();const form=event.target,values=Object.fromEntries(new FormData(form));
@@ -445,6 +495,7 @@ document.addEventListener('submit',async event=>{
 });
 document.addEventListener('change',async event=>{
 
+ if(event.target.id==='show-broad'){includeBroad=event.target.checked;render();}
  if(event.target.id==='graph-filter'){filter=event.target.value;render();}
  if(event.target.id==='import')try{const file=event.target.files[0];if(!file)return;if(file.size>15_000_000)throw new Error('History file is too large.');const rows=parseImport(await file.text()),existing=new Set(saved.map(s=>s.id));for(const s of rows)if(existing.has(s.id))s.id=uid();await storage.importCases(rows.map(persistentCopy));saved=await storage.loadCases();view='history';render();toast('History imported.');}catch(error){toast(error.message);}
 });
@@ -454,6 +505,10 @@ render();
 function manualPanel(){
  const links=manualLinks(current);
  return `<details class="panel manual-panel" ><summary>Manual checks <span>${links.length} links · not checked automatically</span></summary><p>These are suggested addresses and searches, not found profiles or evidence. Open a page to inspect it; you can then save your own observation.</p><div class="manual-grid">${links.map(l=>`<article><div><strong>${esc(l.source)}</strong><small>${esc(l.kind)} · Not checked</small></div>${sourceLink(l.url,'Open')}<button class="text-button" data-review="${esc(l.url)}">Record observation</button></article>`).join('')||'<p>Add a username, name or profile link to prepare checks.</p>'}</div></details>`;
+}
+
+function evidenceCard({e,rank}){
+ return `<article class="panel evidence"><div class="source-label">${esc(e.source)}<span>${esc(rank.label)}</span></div><h2>${esc(e.title)}</h2><p>${esc(e.summary)}</p><details class="rank-reasons"><summary>Why this result?</summary><ul>${rank.reasons.map(reason=>`<li>${esc(reason)}</li>`).join('')}</ul></details><small>Identity unconfirmed · ${when(e.retrievedAt)}</small><div class="evidence-actions">${sourceLink(e.details.url||e.url)}<button class="text-button" data-evidence="${esc(e.id)}">Details</button></div></article>`;
 }
 
 })().catch(showBootFailure);</script>

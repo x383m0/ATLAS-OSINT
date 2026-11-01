@@ -1,4 +1,4 @@
-# ATLAS Static v0.8.1
+# ATLAS Static v0.9.0
 
 Complete standalone static website for GitHub Pages. No backend, API keys, AI, package installation or build step required.
 
@@ -52,3 +52,11 @@ Source access from a deployed browser has not been verified in this environment.
 The deployed page was stuck because js/app.js returned 404. The supplied index.html now embeds all application code, CSS and SVG icon; only one file needs uploading. No source APIs changed in this fix. Browser history keeps the same database and origin. Storage initialization has a five-second timeout so it cannot hold the interface indefinitely. Startup failures show a message instead of remaining on the opening screen.
 
 To edit: modify js/ and styles.css, then run node scripts/build-single.mjs. source-index.html is the editable HTML template, not the upload entry point. Run node scripts/test-boot.mjs to validate the generated entry page.
+
+## Relevance in v0.9.0
+
+The graph and evidence library focus on direct profile lookups, name-plus-context references, and manual observations. Broad references are retained in history and exports and available through Include broad references. Each evidence card explains its ranking. Existing history is ranked when opened, without changing original evidence or confidence.
+
+Name matching uses whole normalized phrases in returned titles/summaries. Accents and punctuation are normalized. Location components separated by commas/semicolons and organization phrases are compared only with returned titles, summaries and public fields. Queries, URLs and provenance never count as matches. Missing context means unobserved, not a proven mismatch. No geocoding, identity probability or automatic person verification is performed. First-name-only queries can still produce broad matches; results remain provisional.
+
+Run node scripts/test-relevance.mjs after edits, then node scripts/build-single.mjs. Upload the generated index.html only.
