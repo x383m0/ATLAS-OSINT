@@ -1,0 +1,9 @@
+{
+  "name": "atlas-static",
+  "version": "0.8.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node scripts/test-static.mjs && node scripts/test-extra.mjs"
+  }
+}
