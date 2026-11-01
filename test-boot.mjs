@@ -40,6 +40,6 @@ const loaded=await startup({open(){
 }});
 assert.match(loaded.app.innerHTML,/Start with what you know/);
 assert.doesNotMatch(loaded.app.innerHTML,/Browser storage unavailable/);
-assert.match(loaded.app.innerHTML,/v0.8.1/);
+assert.match(loaded.app.innerHTML,/v0.9.0/);
 console.log('PASS Actual bundled application opens with readable history storage');
 console.log('3 boot checks passed; DOM harness does not verify browser rendering.');

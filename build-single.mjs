@@ -5,7 +5,7 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const read=p=>fs.readFileSync(path.join(root,p),'utf8');
 const strip=s=>s.replace(/^import .*?;\r?\n/gm,'').replace(/^export /gm,'');
 let html=read('source-index.html');
-const modules=['model','storage','profile-links','manual','extra-sources','browser-sources','search','graph','app'];
+const modules=['model','relevance','storage','profile-links','manual','extra-sources','browser-sources','search','graph','app'];
 const code=modules.map(name=>{
  let s=strip(read('js/'+name+'.js'));
  if(name==='app')s='const esc=escape;const storage={openStorage,loadCases,saveCase,deleteCase,importCases,clearCases};\n'+s;
