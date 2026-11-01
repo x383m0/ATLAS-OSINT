@@ -15,7 +15,7 @@ const sourceLink=(url,label='Original source')=>safeUrl(url)?`<a target="_blank"
 function go(next){if(busy)return;if(next==='new'){current=null;query='';filter='all';}view=next;render();}
 function render(){
  graph?.dispose();graph=null;
- app.innerHTML=`<header class="header"><button class="brand" data-nav="new" ${busy?'disabled':''}><img src="./assets/icon.svg" alt="">ATLAS</button><nav aria-label="Main navigation">${NAV.map(([id,label])=>`<button data-nav="${id}" title="${label}" aria-label="${label}" ${view===id?'aria-current="page"':''} ${busy||(['graph','evidence'].includes(id)&&!current)?'disabled':''}>${icon(id)}<span>${label}</span></button>`).join('')}</nav></header><main>${saveError?`<div class="notice">${esc(saveError)}</div>`:''}${busy?loading():pages[view]()}</main><footer>Public profiles. Source-backed results.<span>ATLAS · v0.8.0 · Static</span></footer><dialog id="detail"></dialog><input type="file" id="import" accept=".json,application/json" hidden>`;
+ app.innerHTML=`<header class="header"><button class="brand" data-nav="new" ${busy?'disabled':''}><img src="./assets/icon.svg" alt="">ATLAS</button><nav aria-label="Main navigation">${NAV.map(([id,label])=>`<button data-nav="${id}" title="${label}" aria-label="${label}" ${view===id?'aria-current="page"':''} ${busy||(['graph','evidence'].includes(id)&&!current)?'disabled':''}>${icon(id)}<span>${label}</span></button>`).join('')}</nav></header><main>${saveError?`<div class="notice">${esc(saveError)}</div>`:''}${busy?loading():pages[view]()}</main><footer>Public profiles. Source-backed results.<span>ATLAS · v0.8.1 · Static</span></footer><dialog id="detail"></dialog><input type="file" id="import" accept=".json,application/json" hidden>`;
  if(view==='graph'&&current&&!busy)graph=mountGraph(document.querySelector('#graph'),current,{filter,onSelect:inspect});
 }
 const heading=(title,text,extra='')=>`<div class="heading"><div><h1>${title}</h1><p>${text}</p></div>${extra}</div>`;
@@ -78,7 +78,7 @@ document.addEventListener('change',async event=>{
  if(event.target.id==='graph-filter'){filter=event.target.value;render();}
  if(event.target.id==='import')try{const file=event.target.files[0];if(!file)return;if(file.size>15_000_000)throw new Error('History file is too large.');const rows=parseImport(await file.text()),existing=new Set(saved.map(s=>s.id));for(const s of rows)if(existing.has(s.id))s.id=uid();await storage.importCases(rows.map(persistentCopy));saved=await storage.loadCases();view='history';render();toast('History imported.');}catch(error){toast(error.message);}
 });
-try{await storage.openStorage();saved=await storage.loadCases();}catch(error){saveError='Browser storage unavailable. Results can be viewed but history cannot be saved.';}
+try{await Promise.race([(async()=>{await storage.openStorage();saved=await storage.loadCases();})(),new Promise((_,reject)=>setTimeout(()=>reject(new Error('Browser storage took too long to open.')),5000))]);}catch(error){saveError='Browser storage unavailable. Results can be viewed but history cannot be saved.';}
 render();
 
 function manualPanel(){

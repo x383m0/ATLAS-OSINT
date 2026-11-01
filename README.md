@@ -1,11 +1,11 @@
-# ATLAS Static v0.8.0
+# ATLAS Static v0.8.1
 
 Complete standalone static website for GitHub Pages. No backend, API keys, AI, package installation or build step required.
 
 ## Publish on GitHub Pages
 
 1. Create a GitHub repository (for example `ATLAS`).
-2. Extract this ZIP. Upload its **contents** into the repository root. `index.html`, `styles.css`, `assets/` and `js/` must be at the top level, not inside an extra folder. Include `.nojekyll` if your uploader shows it.
+2. Extract this ZIP and upload **index.html** into the repository root, replacing the old index.html. It now contains the entire application, styles and icon. Other files are included for editing but are not needed to run the website.
 3. In the repository, open **Settings → Pages**.
 4. Under **Build and deployment**, choose **Deploy from a branch**, then `main` and `/ (root)`. Save.
 5. Wait for the Pages deployment to finish. Open the URL displayed by GitHub, usually `https://YOUR-USERNAME.github.io/ATLAS/`.
@@ -46,3 +46,9 @@ Endpoint documentation:
 - Stack Exchange: https://api.stackexchange.com/docs/users
 
 Source access from a deployed browser has not been verified in this environment. Configured automatic checks are not a guarantee of source availability; blocked requests remain unavailable. The static app does not bypass CORS or source limits.
+
+## Startup fix in v0.8.1
+
+The deployed page was stuck because js/app.js returned 404. The supplied index.html now embeds all application code, CSS and SVG icon; only one file needs uploading. No source APIs changed in this fix. Browser history keeps the same database and origin. Storage initialization has a five-second timeout so it cannot hold the interface indefinitely. Startup failures show a message instead of remaining on the opening screen.
+
+To edit: modify js/ and styles.css, then run node scripts/build-single.mjs. source-index.html is the editable HTML template, not the upload entry point. Run node scripts/test-boot.mjs to validate the generated entry page.
